@@ -24,6 +24,7 @@ class TrackInfo:
 class Config:
     buffer_size: int = 2048
     sample_rate: int = 44100
+    audio_device_index: int | None = None
 
 
 @dataclass
