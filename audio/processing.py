@@ -11,10 +11,10 @@ def calculate_rms(audio_data: np.ndarray) -> float:
     return np.sqrt(np.mean(audio_data**2))
 
 
-def compute_fft(audio_data: np.ndarray) -> np.ndarray:
+def compute_fft(audio_data: np.ndarray, silence_threshold: float = 0.001) -> np.ndarray:
     """ Computes Raw Fourier Transform over the audio input """
     # In case we encounter silence or empty data
-    if len(audio_data) == 0 or np.max(np.abs(audio_data)) < 1e-10:
+    if len(audio_data) == 0 or np.max(np.abs(audio_data)) < silence_threshold:
         return np.zeros(len(audio_data) // 2 + 1)
 
     window = np.hanning(len(audio_data))
@@ -32,7 +32,8 @@ def compute_fft(audio_data: np.ndarray) -> np.ndarray:
     return magnitude_normalized
 
 
-def group_frequencies(fft_magnitudes: np.ndarray, num_bands: int = 32, sample_rate: int = 44100) -> np.ndarray:
+def group_frequencies(fft_magnitudes: np.ndarray, num_bands: int = 32,
+                      sample_rate: int = 44100, noise_floor_db: float = -60.0) -> np.ndarray:
     """
     Groups FFT bins into logarithmic bands for visualization
 
@@ -71,10 +72,11 @@ def group_frequencies(fft_magnitudes: np.ndarray, num_bands: int = 32, sample_ra
         end_bin = bin_boundaries[i + 1]
 
         if start_bin < end_bin:
-            # Average the magnitude in this frequency range
             bands[i] = np.mean(fft_magnitudes[start_bin:end_bin])
         else:
-            # Handle edge case where bins are too close
             bands[i] = fft_magnitudes[start_bin]
+
+    bands_db = (bands / 100 * 80) - 80
+    bands[bands_db < noise_floor_db] = 0
 
     return bands

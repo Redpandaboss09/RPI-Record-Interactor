@@ -21,5 +21,5 @@ class DisplayMode(Protocol):
     def update(self, dt: float) -> None:
         pass
 
-    def render(self, painter: "QPainter") -> None:
+    def render(self, painter: "QPainter", rect: "QRect") -> None:
         pass

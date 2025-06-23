@@ -9,6 +9,7 @@ from modes.now_playing_mode import NowPlayingMode
 from itertools import cycle
 
 import audio.processing as ap
+import numpy as np
 
 
 class KioskApp(QMainWindow):
@@ -31,7 +32,9 @@ class KioskApp(QMainWindow):
         self.audio_update_timer.timeout.connect(self.__update_loop)
         self.audio_update_timer.start()
 
-        cyclable_modes = [mode for mode in Modes if mode != Modes.Waiting]
+        self.last_update_time = QtCore.QTime.currentTime()
+
+        cyclable_modes = [mode for mode in Modes if mode != Modes.WAITING]
         self.mode_cycle = cycle(cyclable_modes)
         self.modes = {
             Modes.WAITING: WaitingMode(context),
@@ -57,7 +60,7 @@ class KioskApp(QMainWindow):
         painter = QtGui.QPainter(self)
         painter.fillRect(self.rect(), QtCore.Qt.black)
 
-        self.current_mode.render(painter)
+        self.current_mode.render(painter, self.rect())
 
     def switch_mode(self, mode: Modes):
         """ Switches the current mode based on given mode number. """
@@ -88,14 +91,24 @@ class KioskApp(QMainWindow):
 
     def __update_loop(self):
         """ Gathers latest audio data and processes it, stores it in the current context, and redraws the window. """
+        current_time = QtCore.QTime.currentTime()
+        dt = self.last_update_time.msecsTo(current_time) / 1000.0
+        self.last_update_time = current_time
+
         audio_data = self.context.audio.get_audio_data()
-        computed_data = ap.compute_fft(audio_data)
 
         self.context.audio_state.volume_rms = ap.calculate_rms(audio_data)
-        self.context.audio_state.frequency_bins = ap.group_frequencies(
-            computed_data,
-            32,
-            self.context.config.sample_rate
-        )
 
+        if self.context.audio_state.volume_rms < self.context.config.silence_threshold:
+            self.context.audio_state.frequency_bins = np.zeros(32)
+        else:
+            computed_data = ap.compute_fft(audio_data, self.context.config.silence_threshold)
+            self.context.audio_state.frequency_bins = ap.group_frequencies(
+                computed_data,
+                32,
+                self.context.config.sample_rate,
+                self.context.config.noise_floor_db
+            )
+
+        self.current_mode.update(dt)
         self.update()

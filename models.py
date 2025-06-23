@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -7,8 +7,8 @@ if TYPE_CHECKING:
 
 @dataclass
 class AudioState:
-    volume_rms: float
-    frequency_bins: list[float]
+    volume_rms: float = 0.0
+    frequency_bins: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,8 @@ class Config:
     buffer_size: int = 2048
     sample_rate: int = 44100
     audio_device_index: int | None = None
+    noise_floor_db: float = -60.0
+    silence_threshold: float = 0.001
 
 
 @dataclass
