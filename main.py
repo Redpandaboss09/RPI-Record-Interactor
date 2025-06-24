@@ -11,13 +11,25 @@ def main():
     # Create config
     config = Config()
 
+    # Try to initialize fingerprint service
+    metadata_service = None
+    try:
+        from services.fingerprint import FingerprintService
+        from config.database import DEJAVU_CONFIG
+
+        metadata_service = FingerprintService(config, DEJAVU_CONFIG)
+        print("Fingerprinting service initialized")
+    except ImportError:
+        print("Dejavu not installed - fingerprinting disabled")
+    except Exception as e:
+        print(f"Could not initialize fingerprinting: {e}")
+
     # Use context manager for audio
     with RealTimeAudioCapture(config) as audio_source:
-        # Create context
         context = AppContext(
             config=config,
             audio=audio_source,
-            metadata=None,
+            metadata=metadata_service,
             audio_state=AudioState()
         )
 
@@ -26,17 +38,13 @@ def main():
         kiosk.show()
 
         # Run app
-        sys.exit(app.exec_())
-
-    # Audio automatically cleaned up when exiting 'with' block
+        try:
+            sys.exit(app.exec_())
+        finally:
+            # Cleanup
+            if metadata_service:
+                metadata_service.stop()
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-
-        traceback.print_exc()
-        input("Press Enter to exit...")
+    main()

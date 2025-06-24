@@ -1,11 +1,13 @@
-CREATE DATABASE kiosk_music;
-
-CREATE TABLE track_metadata (
-    fingerprint_id INTEGER PRIMARY KEY,
-    title VARCHAR(255),
-    artist VARCHAR(255),
-    album VARCHAR(255),
-    album_art_path VARCHAR(500),
-    lyrics_file VARCHAR(500),
-    duration FLOAT
+CREATE TABLE IF NOT EXISTS track_metadata (
+    dejavu_song_id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    artist TEXT NOT NULL,
+    album TEXT,
+    album_art_path TEXT,
+    lyrics_file TEXT,
+    duration REAL,
+    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_track_artist ON track_metadata(artist);
+CREATE INDEX IF NOT EXISTS idx_track_album ON track_metadata(album);

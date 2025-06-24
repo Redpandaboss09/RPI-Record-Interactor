@@ -6,6 +6,7 @@ from modes.lyrics_mode import LyricsMode
 from modes.waiting_mode import WaitingMode
 from modes.visualizer_mode import VisualizerMode
 from modes.now_playing_mode import NowPlayingMode
+from services.recognition_buffer import RecognitionBuffer
 from itertools import cycle
 
 import audio.processing as ap
@@ -21,6 +22,17 @@ class KioskApp(QMainWindow):
 
         self.context = context
         self.dev_mode = dev_mode
+
+        if context.metadata:
+            self.recognition_buffer = RecognitionBuffer(
+                target_seconds=5.0,
+                sample_rate=context.config.sample_rate
+            )
+
+            # Start the fingerprint service
+            context.metadata.start()
+        else:
+            self.recognition_buffer = None
 
         self.mode_switch_timer = QtCore.QTimer()
         self.mode_switch_timer.setInterval(60000)  # One minute, in milliseconds
@@ -97,6 +109,15 @@ class KioskApp(QMainWindow):
 
         audio_data = self.context.audio.get_audio_data()
 
+        # Feed to recognition buffer if available
+        if self.recognition_buffer and self.context.metadata:
+            self.recognition_buffer.add_audio(audio_data)
+
+            # Check if we have a chunk ready for recognition
+            recognition_chunk = self.recognition_buffer.get_recognition_chunk()
+            if recognition_chunk is not None:
+                self.context.metadata.submit_audio(recognition_chunk)
+
         self.context.audio_state.volume_rms = ap.calculate_rms(audio_data)
 
         if self.context.audio_state.volume_rms < self.context.config.silence_threshold:
@@ -112,3 +133,9 @@ class KioskApp(QMainWindow):
 
         self.current_mode.update(dt)
         self.update()
+
+    def closeEvent(self, event):
+        """ Handle application close. """
+        if self.context.metadata:
+            self.context.metadata.stop()
+        event.accept()
