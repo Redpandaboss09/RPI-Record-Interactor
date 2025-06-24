@@ -12,5 +12,3 @@
 modules.xml
 .idea/misc.xml
 *.ipr
-
-/scripts/test_audio.py
