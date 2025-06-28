@@ -12,3 +12,11 @@
 modules.xml
 .idea/misc.xml
 *.ipr
+
+.env
+/fpcalc.exe
+/music_collection.db
+/album_art/*
+
+# Exclusions
+!/album_art/.gitkeep

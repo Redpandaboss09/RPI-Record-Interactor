@@ -6,7 +6,6 @@ from modes.lyrics_mode import LyricsMode
 from modes.waiting_mode import WaitingMode
 from modes.visualizer_mode import VisualizerMode
 from modes.now_playing_mode import NowPlayingMode
-from services.recognition_buffer import RecognitionBuffer
 from itertools import cycle
 
 import audio.processing as ap
@@ -24,11 +23,6 @@ class KioskApp(QMainWindow):
         self.dev_mode = dev_mode
 
         if context.metadata:
-            self.recognition_buffer = RecognitionBuffer(
-                target_seconds=5.0,
-                sample_rate=context.config.sample_rate
-            )
-
             # Start the fingerprint service
             context.metadata.start()
         else:
