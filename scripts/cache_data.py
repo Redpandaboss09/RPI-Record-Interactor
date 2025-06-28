@@ -3,6 +3,7 @@ Enhanced music collection cache with improved album disambiguation.
 Handles singles vs albums, standard vs deluxe editions intelligently.
 """
 
+import sys
 import os
 import json
 import sqlite3
@@ -14,7 +15,9 @@ import logging
 import re
 import time
 from collections import defaultdict
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, List, Optional
+
+sys.path.append(str(Path(__file__).parent.parent))
 
 # Configure logging
 logging.basicConfig(level=logging.WARNING)
@@ -30,9 +33,29 @@ class AlbumCandidate:
 
     def __init__(self, release_id: str, release_data: dict):
         self.release_id = release_id
-        self.title = release_data.get('title', '')
+
+        # Get base title
+        base_title = release_data.get('title', '')
+
+        # Check for disambiguation field (this often contains edition info)
+        disambiguation = release_data.get('disambiguation', '')
+
+        # Construct full title with disambiguation if present
+        if disambiguation:
+            self.title = f"{base_title} ({disambiguation})"
+        else:
+            self.title = base_title
+
+        # Also check if the release group has additional info
+        release_group = release_data.get('release-group', {})
+        rg_disambiguation = release_group.get('disambiguation', '')
+
+        # If we still don't have edition info but release group does, use that
+        if not disambiguation and rg_disambiguation and rg_disambiguation.lower() not in self.title.lower():
+            self.title = f"{self.title} ({rg_disambiguation})"
+
         self.artist = release_data.get('artist-credit-phrase', '')
-        self.release_type = release_data.get('release-group', {}).get('type', '')
+        self.release_type = release_group.get('type', '')
         self.track_count = sum(m.get('track-count', 0) for m in release_data.get('medium-list', []))
         self.date = release_data.get('date', '')
         self.country = release_data.get('country', '')
@@ -1094,17 +1117,27 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python cache_vinyl.py <acoustid_api_key> [audio_files...]")
+        print("Usage: python cache_data.py <acoustid_api_key> [options]")
         print("\nExamples:")
-        print("  python cache_vinyl.py YOUR_API_KEY music\\*.mp3")
-        print("  python cache_vinyl.py YOUR_API_KEY \"C:\\Music\\Album Name\\\"")
-        print("  python cache_vinyl.py YOUR_API_KEY --album \"C:\\Music\\Album\\\" \"Album Name\"")
+        print("  python cache_data.py YOUR_API_KEY music\\*.mp3")
+        print("  python cache_data.py YOUR_API_KEY \"C:\\Music\\Album Name\\\"")
+        print("  python cache_data.py YOUR_API_KEY --album \"C:\\Music\\Album\\\" \"Album Name\"")
+        print("  python cache_data.py YOUR_API_KEY --lyrics-only")
         sys.exit(1)
 
     api_key = sys.argv[1]
 
+    # Check for lyrics-only mode (update existing tracks)
+    if len(sys.argv) > 2 and sys.argv[2] == '--lyrics-only':
+        from services.lrc_lyrics_service import LRCLIBService
+
+        print("\nFetching lyrics for all existing tracks...")
+        lyrics_service = LRCLIBService()
+        lyrics_service.fetch_lyrics_for_all_tracks()
+        sys.exit(0)
+
     # Check for album mode
-    if len(sys.argv) > 2 and sys.argv[2] == '--album':
+    elif len(sys.argv) > 2 and sys.argv[2] == '--album':
         # Album directory mode
         if len(sys.argv) < 4:
             print("Album mode requires: --album <directory> [album_name]")
@@ -1114,10 +1147,27 @@ if __name__ == "__main__":
         album_name = sys.argv[4] if len(sys.argv) > 4 else None
 
         cache = MusicCollectionCache(api_key)
-        cache.cache_album_directory(album_dir, album_name)
+        result = cache.cache_album_directory(album_dir, album_name)
+
+        # ALWAYS fetch lyrics after caching an album
+        if result and result.get('processed') > 0:
+            from services.lrc_lyrics_service import LRCLIBService
+
+            print("\n" + "=" * 60)
+            print("FETCHING LYRICS FOR NEW TRACKS")
+            print("=" * 60)
+
+            lyrics_service = LRCLIBService()
+
+            # Smart approach: Only fetch lyrics for recently added tracks
+            # This avoids re-checking your entire collection
+            lyrics_service.fetch_lyrics_for_recent_tracks(hours=0.5)  # Last 30 minutes
+
+            # Alternative: If you know the album name, fetch just for that album
+            # if result.get('selected_album'):
+            #     lyrics_service.fetch_lyrics_for_album(result['selected_album'])
+
     else:
         # For backwards compatibility with file-by-file mode
         print("Note: For better album detection, use --album mode")
         print("Processing files individually...")
-
-        # ... rest of the original file processing code ...

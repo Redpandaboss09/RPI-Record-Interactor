@@ -2,7 +2,7 @@ import os
 
 ACOUSTID_API_KEY = os.getenv('ACOUSTID_API')
 CACHE_DB_PATH = "../music_collection.db"
-ALBUM_ART_DIR = "../album_art"
+ALBUM_ART_DIR = "../music_data/album_art"
 
 # Recognition settings
 RECOGNITION_BUFFER_SECONDS = 10

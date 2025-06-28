@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LyricsResult:
-    """Result from LRCLIB API."""
+    """ Result from LRCLIB API. """
     id: int
     track_name: str
     artist_name: str
@@ -36,11 +36,11 @@ class LyricsResult:
 
 
 class LRCLIBService:
-    """Service for fetching lyrics from LRCLIB API."""
+    """ Service for fetching lyrics from LRCLIB API. """
 
     BASE_URL = "https://lrclib.net/api"
 
-    def __init__(self, lyrics_dir: Path = Path("lyrics"), cache_db: str = "music_collection.db"):
+    def __init__(self, lyrics_dir: Path = Path("music_data/lyrics"), cache_db: str = "music_collection.db"):
         self.lyrics_dir = lyrics_dir
         self.lyrics_dir.mkdir(exist_ok=True)
         self.cache_db = cache_db
@@ -107,7 +107,7 @@ class LRCLIBService:
             return None
 
     def get_lyrics_by_id(self, track_id: int) -> Optional[LyricsResult]:
-        """Get lyrics by LRCLIB track ID."""
+        """ Get lyrics by LRCLIB track ID. """
         self._rate_limit()
 
         try:
@@ -175,7 +175,7 @@ class LRCLIBService:
             return None
 
     def update_track_lyrics(self, track_id: int, lyrics_path: str):
-        """Update track in database with lyrics path."""
+        """ Update track in database with lyrics path. """
         conn = sqlite3.connect(self.cache_db)
         cursor = conn.cursor()
 
@@ -187,6 +187,121 @@ class LRCLIBService:
 
         conn.commit()
         conn.close()
+
+    def fetch_lyrics_for_recent_tracks(self, hours: float = 0.25):
+        """
+        Fetch lyrics only for recently added tracks.
+        Default: 15 minutes (0.25 hours) to catch just the current session.
+        """
+        conn = sqlite3.connect(self.cache_db)
+        cursor = conn.cursor()
+
+        # Get tracks added within the time window that don't have lyrics
+        cursor.execute("""
+            SELECT id, title, artist, album, duration
+            FROM tracks
+            WHERE (lyrics_local IS NULL OR lyrics_local = '')
+            AND datetime(added_date) > datetime('now', ? || ' hours')
+            ORDER BY artist, album, track_number
+        """, (-hours,))
+
+        tracks = cursor.fetchall()
+
+        if not tracks:
+            print("No new tracks need lyrics")
+            conn.close()
+            return
+
+        print(f"Found {len(tracks)} recently added tracks without lyrics")
+
+        success_count = 0
+        instrumental_count = 0
+
+        for i, (track_id, title, artist, album, duration) in enumerate(tracks, 1):
+            print(f"\n[{i}/{len(tracks)}] {artist} - {title}")
+
+            lyrics_path = self.fetch_and_save_lyrics(
+                title, artist, album, duration
+            )
+
+            if lyrics_path:
+                self.update_track_lyrics(track_id, lyrics_path)
+
+                # Check if instrumental
+                with open(lyrics_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    if '[instrumental]' in content.lower():
+                        instrumental_count += 1
+                        print("  -> Instrumental track")
+                    else:
+                        success_count += 1
+                        print(f"  -> Saved lyrics")
+            else:
+                print("  -> No lyrics found")
+
+        conn.close()
+
+        print(f"\nSummary:")
+        print(f"  Tracks with lyrics: {success_count}")
+        print(f"  Instrumental tracks: {instrumental_count}")
+        print(f"  Not found: {len(tracks) - success_count - instrumental_count}")
+
+    def fetch_lyrics_for_album(self, album_name: str):
+        """
+        Fetch lyrics for all tracks in a specific album.
+        """
+        conn = sqlite3.connect(self.cache_db)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, title, artist, album, duration
+            FROM tracks
+            WHERE album = ?
+            AND (lyrics_local IS NULL OR lyrics_local = '')
+            ORDER BY track_number
+        """, (album_name,))
+
+        tracks = cursor.fetchall()
+
+        if not tracks:
+            print(f"No tracks without lyrics found for album: {album_name}")
+            conn.close()
+            return
+
+        print(f"Fetching lyrics for {len(tracks)} tracks from: {album_name}")
+
+        # Use the same logic as fetch_lyrics_for_all_tracks
+        success_count = 0
+        instrumental_count = 0
+
+        for i, (track_id, title, artist, album, duration) in enumerate(tracks, 1):
+            print(f"\n[{i}/{len(tracks)}] {title}")
+
+            lyrics_path = self.fetch_and_save_lyrics(
+                title, artist, album, duration
+            )
+
+            if lyrics_path:
+                self.update_track_lyrics(track_id, lyrics_path)
+
+                # Check if instrumental
+                with open(lyrics_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    if '[instrumental]' in content.lower():
+                        instrumental_count += 1
+                        print("  -> Instrumental track")
+                    else:
+                        success_count += 1
+                        print(f"  -> Saved lyrics")
+            else:
+                print("  -> No lyrics found")
+
+        conn.close()
+
+        print(f"\nAlbum lyrics summary:")
+        print(f"  Tracks with lyrics: {success_count}")
+        print(f"  Instrumental tracks: {instrumental_count}")
+        print(f"  Not found: {len(tracks) - success_count - instrumental_count}")
 
     def fetch_lyrics_for_all_tracks(self, limit: Optional[int] = None):
         """
@@ -243,14 +358,14 @@ class LRCLIBService:
         print(f"  Not found: {len(tracks) - success_count - instrumental_count}")
 
     def _rate_limit(self):
-        """Simple rate limiting."""
+        """ Simple rate limiting. """
         elapsed = time.time() - self.last_request_time
         if elapsed < self.min_request_interval:
             time.sleep(self.min_request_interval - elapsed)
         self.last_request_time = time.time()
 
     def _parse_result(self, data: Dict) -> LyricsResult:
-        """Parse API response into LyricsResult."""
+        """ Parse API response into LyricsResult. """
         return LyricsResult(
             id=data.get('id'),
             track_name=data.get('trackName', ''),
@@ -264,7 +379,7 @@ class LRCLIBService:
 
     def _find_best_duration_match(self, results: List[Dict],
                                   target_duration: float) -> Optional[Dict]:
-        """Find result with closest duration match."""
+        """ Find result with closest duration match. """
         if not results:
             return None
 
@@ -285,7 +400,7 @@ class LRCLIBService:
         return best_match or results[0]  # Fallback to first if no good match
 
     def _check_existing_lyrics(self, artist: str, title: str) -> Optional[Path]:
-        """Check if we already have lyrics for this track."""
+        """ Check if we already have lyrics for this track. """
         filename = f"{self._sanitize_filename(artist)} - {self._sanitize_filename(title)}.lrc"
         file_path = self.lyrics_dir / filename
 
@@ -296,7 +411,7 @@ class LRCLIBService:
 
     def _create_instrumental_lrc(self, artist: str, title: str,
                                  album: Optional[str], duration: Optional[float]) -> str:
-        """Create LRC for instrumental track."""
+        """ Create LRC for instrumental track. """
         lrc = f"[ar:{artist}]\n[ti:{title}]\n"
         if album:
             lrc += f"[al:{album}]\n"
@@ -309,7 +424,7 @@ class LRCLIBService:
 
     def _create_lrc_from_plain(self, plain_lyrics: str, artist: str, title: str,
                                album: Optional[str], duration: Optional[float]) -> str:
-        """Convert plain lyrics to basic LRC format."""
+        """ Convert plain lyrics to basic LRC format. """
         lines = plain_lyrics.strip().split('\n')
 
         # Build header
@@ -343,16 +458,14 @@ class LRCLIBService:
         return lrc
 
     def _sanitize_filename(self, text: str) -> str:
-        """Remove invalid filename characters."""
+        """ Remove invalid filename characters. """
         invalid_chars = '<>:"/\\|?*'
         for char in invalid_chars:
             text = text.replace(char, '_')
         return text.strip()
 
-
-# Integration with your app
 def add_lyrics_to_track_info(track_info, lyrics_service: LRCLIBService):
-    """Helper to add lyrics path to TrackInfo object."""
+    """ Helper to add lyrics path to TrackInfo object. """
     if track_info and track_info.title and track_info.artist:
         lyrics_path = lyrics_service._check_existing_lyrics(
             track_info.artist,
@@ -361,25 +474,3 @@ def add_lyrics_to_track_info(track_info, lyrics_service: LRCLIBService):
         if lyrics_path:
             track_info.lyrics_path = str(lyrics_path)
     return track_info
-
-
-if __name__ == "__main__":
-    # Test the service
-    service = LRCLIBService()
-
-    # Test single track
-    print("Testing single track...")
-    result = service.search_lyrics(
-        track_name="No Pole",
-        artist_name="Don Toliver",
-        album_name="Love Sick"
-    )
-
-    if result:
-        print(f"Found: {result.track_name} by {result.artist_name}")
-        print(f"Has synced lyrics: {result.has_synced_lyrics}")
-        print(f"Instrumental: {result.instrumental}")
-
-    # Fetch for all tracks
-    # print("\nFetching lyrics for all tracks...")
-    # service.fetch_lyrics_for_all_tracks(limit=5)  # Test with 5 tracks first

@@ -16,7 +16,9 @@ modules.xml
 .env
 /fpcalc.exe
 /music_collection.db
-/album_art/*
+/music_data/album_art/*
+/music_data/lyrics/*
 
 # Exclusions
-!/album_art/.gitkeep
+!/music_data/album_art/.gitkeep
+!/music_data/lyrics/.gitkeep
