@@ -25,8 +25,6 @@ class KioskApp(QMainWindow):
         if context.metadata:
             # Start the fingerprint service
             context.metadata.start()
-        else:
-            self.recognition_buffer = None
 
         self.mode_switch_timer = QtCore.QTimer()
         self.mode_switch_timer.setInterval(60000)  # One minute, in milliseconds
@@ -103,14 +101,15 @@ class KioskApp(QMainWindow):
 
         audio_data = self.context.audio.get_audio_data()
 
-        # Feed to recognition buffer if available
-        if self.recognition_buffer and self.context.metadata:
-            self.recognition_buffer.add_audio(audio_data)
+        # Feed to recognition service if available
+        if self.context.metadata:
+            # Convert to mono if needed
+            if len(audio_data.shape) > 1:
+                mono_data = np.mean(audio_data, axis=1)
+            else:
+                mono_data = audio_data
 
-            # Check if we have a chunk ready for recognition
-            recognition_chunk = self.recognition_buffer.get_recognition_chunk()
-            if recognition_chunk is not None:
-                self.context.metadata.submit_audio(recognition_chunk)
+            self.context.metadata.submit_audio(mono_data)
 
         self.context.audio_state.volume_rms = ap.calculate_rms(audio_data)
 

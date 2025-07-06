@@ -1,6 +1,6 @@
 from enum import Enum, unique
 
-#TODO CATCH VALUE ERROR FROM UNIQUE
+
 @unique
 class Modes(Enum):
     """
