@@ -16,14 +16,9 @@ modules.xml
 .env
 /database/*
 /logs/*
-/music_collection.db
-/music_data/album_art/*
-/music_data/lyrics/*
-/music_data/mp3/*
+/music_data/*
 
 # Exclusions
 !/database/.gitkeep
 !/logs/.gitkeep
-!/music_data/album_art/.gitkeep
-!/music_data/lyrics/.gitkeep
-!/music_data/mp3/.gitkeep
+!/music_data/.gitkeep

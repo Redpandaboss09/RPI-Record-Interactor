@@ -5,8 +5,7 @@ from tqdm import tqdm
 
 import numpy as np
 from pydub import AudioSegment
-from mutagen.mp3 import MP3
-from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK
+from mutagen.flac import FLAC
 
 import sys
 from pathlib import Path
@@ -20,27 +19,27 @@ from services.music_database import MusicDatabase
 
 
 def process_music_folder(folder_path: Path, config: Config, reprocess: bool = False):
-    """ Process all MP3 files in a folder structure. """
+    """ Process all FLAC files in a folder structure. """
     setup_logging()
     logger = logging.getLogger(__name__)
 
     logger.info(f'Processing music folder {folder_path}')
     logger.info(f'Reprocess existing: {reprocess}')
 
-    # Find all mp3 files
-    mp3_files = []
+    # Find all FLAC files
+    flac_files = []
     for album_folder in folder_path.iterdir():
         if album_folder.is_dir():
-            for mp3_file in album_folder.glob("*.mp3"):
-                mp3_files.append((mp3_file, album_folder.name))
+            for flac_file in album_folder.glob("*.flac"):
+                flac_files.append((flac_file, album_folder))
 
-    if not mp3_files:
-        logger.warning(f'No MP3 files found in folder {folder_path}')
-        print(f'No MP3 files found in folder {folder_path}')
+    if not flac_files:
+        logger.warning(f'No flac files found in folder {folder_path}')
+        print(f'No flac files found in folder {folder_path}')
         return
 
-    logger.info(f'Found {len(mp3_files)} MP3 files')
-    print(f'Found {len(mp3_files)} MP3 files')
+    logger.info(f'Found {len(flac_files)} flac files')
+    print(f'Found {len(flac_files)} flac files')
 
     # Initialize necessary components
     processor = AudioProcessor(config)
@@ -52,12 +51,12 @@ def process_music_folder(folder_path: Path, config: Config, reprocess: bool = Fa
     skipped = 0
 
     with MusicDatabase(config) as db:
-        with tqdm(mp3_files, desc="Processing songs") as pbar:
-            for file_path, album_name in pbar:
+        with tqdm(flac_files, desc="Processing songs") as pbar:
+            for file_path, album_folder in pbar:
                 pbar.set_description(f'Processing {file_path.name}')
 
                 result = process_file(
-                    file_path, album_name, db, processor, generator,
+                    file_path, album_folder, db, processor, generator,
                     config, logger, reprocess
                 )
 
@@ -82,41 +81,28 @@ def process_music_folder(folder_path: Path, config: Config, reprocess: bool = Fa
     logger.info(f'Processing complete - Success: {successful}, Failed: {failed}, Skipped: {skipped}')
 
 
-def extract_mp3_metadata(file_path: Path, album_name: str) -> Optional[TrackInfo]:
-    """ Extract metadata from MP3 file. """
+def extract_metadata(file_path: Path, album_folder: Path) -> Optional[TrackInfo]:
+    """ Extract metadata from a FLAC file. """
     try:
-        # Load the mp3 metadata
-        audio = MP3(str(file_path))
+        # Load the FLAC metadata
+        audio = FLAC(str(file_path))
 
-        # Extract ID3 tags
-        if audio.tags is None:
-            # Fill in as much as possible using filename
-            title = file_path.stem
-            artist = "Unknown Artist"
-            album = album_name
-            track_number = None
-            total_tracks = None
-        else:
-            tags = audio.tags
+        # Extract tags
+        title = audio.get("title", [file_path.stem])[0]
+        artist = audio.get("artist", ["Unknown Artist"])[0]
+        album = audio.get("album", [album_folder.name])[0]
 
-            # Get the basic metadata
-            title = str(tags.get("TIT2", file_path.stem))
-            artist = str(tags.get("TPE1", "Unknown Artist"))
-            album = str(tags.get("TALB", album_name))
+        # Track numbers
+        track_str = audio.get("tracknumber", [""])[0]
+        total_str = audio.get("totaltracks", audio.get("tracktotal", [""]))[0]
 
-            # Get the track number
-            track_info = tags.get("TRCK", None)
-            if track_info:
-                track_str = str(track_info)
-                if "/" in track_str:
-                    track_number, total_tracks = track_str.split("/", 1)
-                    track_number = int(track_number) if track_number.isdigit() else None
-                    total_tracks = int(total_tracks) if total_tracks.isdigit() else None
-                else:
-                    track_number = int(track_str) if track_str.isdigit() else None
-                    total_tracks = None
+        track_number = int(track_str) if track_str.isdigit() else None
+        total_tracks = int(total_str) if total_str else None
 
         duration = int(audio.info.length)
+
+        cover_path = album_folder / "cover.jpg"
+        album_art_path = str(cover_path) if cover_path.exists() else None
 
         return TrackInfo(
             title=title,
@@ -126,7 +112,7 @@ def extract_mp3_metadata(file_path: Path, album_name: str) -> Optional[TrackInfo
             audio_file_path=str(file_path),
             track_number=track_number,
             total_tracks=total_tracks,
-            album_art_path=None,
+            album_art_path=album_art_path,
             lyrics_file_path=None
         )
     except Exception as e:
@@ -134,13 +120,13 @@ def extract_mp3_metadata(file_path: Path, album_name: str) -> Optional[TrackInfo
         return None
 
 
-def process_file(file_path: Path, album_name: str, db: MusicDatabase,
+def process_file(file_path: Path, album_folder: Path, db: MusicDatabase,
                  processor: AudioProcessor, generator: FingerprintGenerator,
                  config: Config, logger: logging.Logger, reprocess: bool) -> Optional[bool]:
-    """ Process a single MP3 file. """
+    """ Process a single flac file. """
     try:
         # Extract metadata
-        track_info = extract_mp3_metadata(file_path, album_name)
+        track_info = extract_metadata(file_path, album_folder)
         if not track_info:
             logger.error(f'Failed to extract metadata from {file_path}')
             return False
@@ -182,7 +168,7 @@ def process_file(file_path: Path, album_name: str, db: MusicDatabase,
 def load_audio_file(file_path: Path, target_sample_rate: int) -> Optional[np.ndarray]:
     """ Load and convert audio file to numpy array. """
     try:
-        audio = AudioSegment.from_mp3(file_path)
+        audio = AudioSegment.from_file(file_path, format="flac")
 
         # Convert to mono
         if audio.channels > 1:
