@@ -1,8 +1,10 @@
-from dataclasses import fields
+from collections import defaultdict, Counter
 import sqlite3
+import time
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -13,26 +15,39 @@ class MusicDatabase:
     def __init__(self, config: Config):
         self.config = config
 
+        # In-Memory cache
+        self._track_cache = {}
+        self._stats_cache = None
+        self._cache_time = 0
+
         # SQLite setup
-        self.conn = sqlite3.connect(config.db_path)
+        self.conn = sqlite3.connect(
+            config.db_path,
+            isolation_level='DEFERRED',
+            check_same_thread=False,
+            timeout=30.0
+        )
+
         self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
 
-        self.cursor.execute("PRAGMA foreign_keys = ON")
+        self._configure_performance()
+        self._create_tables()
 
-        self.setup()
-
-    def setup(self):
-        """ Creates all tables and indexes. """
-        try:
-            self._create_tables()
-        except sqlite3.Error as e:
-            print(f'Database error: {e}')
-            raise
+    def _configure_performance(self):
+        """ Sets up SQLITE for most performance. """
+        self.cursor.executescript("""
+            PRAGMA journal_mode = DELETE;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA cache_size = -64000;
+            PRAGMA temp_store = MEMORY;
+            PRAGMA page_size = 16384;
+            PRAGMA optimize;
+        """)
 
     def _create_tables(self):
         """ Creates all tables if they don't exist. """
-        self.cursor.execute('''
+        self.cursor.executescript('''
             CREATE TABLE IF NOT EXISTS tracks(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
@@ -40,59 +55,106 @@ class MusicDatabase:
                 album TEXT,
                 track_number INTEGER,
                 total_tracks INTEGER,
+                disc_number INTEGER DEFAULT 1,
+                total_discs INTEGER,
                 duration INTEGER NOT NULL,
-                audio_file_path TEXT NOT NULL,
+                audio_file_path TEXT NOT NULL UNIQUE,
                 album_art_path TEXT,
                 lyrics_file_path TEXT,
-                date_added DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+                date_added DATETIME DEFAULT CURRENT_TIMESTAMP,
+                fingerprint_count INTEGER DEFAULT 0
+            );
 
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS fingerprints (
-                hash TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS fingerprints(
+                hash INTEGER NOT NULL,
                 track_id INTEGER NOT NULL,
                 time_offset INTEGER NOT NULL,
-                FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
-            )
-        ''')
+                PRIMARY KEY (hash, track_id, time_offset)
+            ) WITHOUT ROWID;
 
-        self.cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_fingerprint_hash ON fingerprints(hash)
+            CREATE INDEX IF NOT EXISTS idx_fingerprint_hash
+                ON fingerprints(hash);
+
+            CREATE INDEX IF NOT EXISTS idx_fingerprint_track
+                ON fingerprints(track_id);
+
+            CREATE INDEX IF NOT EXISTS idx_track_lookup
+                ON tracks(title, artist, album);
+
+            CREATE INDEX IF NOT EXISTS idx_track_disc
+                ON tracks(album, disc_number, track_number);
         ''')
 
         self.conn.commit()
 
     def add_track(self, metadata: TrackInfo) -> int:
         """ Adds a new track to the database. """
-        if self.track_exists(metadata.title, metadata.artist, metadata.album):
-            print(f'Track {metadata.title} by {metadata.artist} already exists')
+        self.cursor.execute(
+            "SELECT id FROM tracks WHERE audio_file_path = ?",
+            (metadata.audio_file_path,)
+        )
+        existing = self.cursor.fetchone()
+
+        if existing:
+            print(f'Track already exists: {metadata.title} by {metadata.artist}')
             return -1
 
-        query = ("INSERT INTO tracks (title, artist, album, duration, audio_file_path, album_art_path, "
-                 "lyrics_file_path, track_number, total_tracks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        params = [metadata.title, metadata.artist, metadata.album, metadata.duration, metadata.audio_file_path,
-                  metadata.album_art_path, metadata.lyrics_file_path, metadata.track_number, metadata.total_tracks]
+        # Insert new track
+        self.cursor.execute("""
+                   INSERT INTO tracks (
+                       title, artist, album, duration, audio_file_path,
+                       album_art_path, lyrics_file_path, track_number, total_tracks,
+                       disc_number, total_discs
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               """, (
+            metadata.title,
+            metadata.artist,
+            metadata.album,
+            metadata.duration,
+            metadata.audio_file_path,
+            metadata.album_art_path,
+            metadata.lyrics_file_path,
+            metadata.track_number,
+            metadata.total_tracks,
+            metadata.disc_number if hasattr(metadata, 'disc_number') else 1,
+            metadata.total_discs if hasattr(metadata, 'total_discs') else None
+        ))
 
-        self.cursor.execute(query, params)
+        track_id = self.cursor.lastrowid
         self.conn.commit()
-        return self.cursor.lastrowid
+
+        # Clear cache
+        self._track_cache.pop(track_id, None)
+        self._stats_cache = None
+
+        return track_id
 
     def delete_track(self, track_id: int) -> None:
         """ Deletes a track from the database. """
-        query = "DELETE FROM tracks WHERE id = ?"
+        # Delete fingerprints first
+        self.cursor.execute("DELETE FROM fingerprints WHERE track_id = ?", (track_id,))
 
-        self.cursor.execute(query, (track_id,))
+        # Delete track
+        self.cursor.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
         self.conn.commit()
 
-    def get_track(self, track_id: int) -> TrackInfo:
-        """ Gets a track from the database. """
-        query = "SELECT * FROM tracks WHERE id = ?"
+        # Clear cache
+        self._track_cache.pop(track_id, None)
+        self._stats_cache = None
 
-        self.cursor.execute(query, (track_id,))
+    def get_track(self, track_id: int) -> Optional[TrackInfo]:
+        """ Gets a track from the database. """
+        # Check cache first
+        if track_id in self._track_cache:
+            return self._track_cache[track_id]
+
+        self.cursor.execute("SELECT * FROM tracks WHERE id = ?", (track_id,))
         row = self.cursor.fetchone()
 
-        return TrackInfo(
+        if not row:
+            return None
+
+        track_info = TrackInfo(
             title=row['title'],
             artist=row['artist'],
             album=row['album'],
@@ -101,46 +163,28 @@ class MusicDatabase:
             album_art_path=row['album_art_path'],
             lyrics_file_path=row['lyrics_file_path'],
             track_number=row['track_number'],
-            total_tracks=row['total_tracks']
+            total_tracks=row['total_tracks'],
+            disc_number=row['disc_number'],
+            total_discs=row['total_discs']
         )
 
-    def update_track(self, track_id: int, updates: dict) -> None:
-        """ Updates a track in the database with fields dictated in updates dictionary. """
-        if not updates:
-            return
+        # Cache for future use
+        self._track_cache[track_id] = track_info
 
-        ALLOWED_FIELDS = set([field.name for field in fields(TrackInfo)])
-
-        valid_updates = {k : v for k, v in updates.items() if k in ALLOWED_FIELDS}
-
-        if not valid_updates:
-            raise ValueError('No valid fields to update')
-
-        invalid_keys = set(updates.keys()) - ALLOWED_FIELDS
-        if invalid_keys:
-            print(f'Warning: Invalid fields: {invalid_keys}')
-
-        # Dynamically make a update clause based on valid inputs
-        set_clauses = [f'{key} = ?' for key in valid_updates.keys()]
-        query = f"UPDATE tracks SET {', '.join(set_clauses)} WHERE id = ?"
-        params = list(valid_updates.values()) + [track_id]
-
-        self.cursor.execute(query, params)
-        self.conn.commit()
+        return track_info
 
     def track_exists(self, title: str, artist: str = None, album: str = None) -> bool:
         """ Check if a track exists in the database. """
         query = "SELECT EXISTS(SELECT 1 FROM tracks WHERE title = ? AND artist = ?"
         params = [title, artist]
 
-        if album is not None:
+        if album:
             query += " AND album = ?"
             params.append(album)
 
         query += ")"
 
         self.cursor.execute(query, params)
-
         return self.cursor.fetchone()[0] == 1
 
     def search_tracks(self, query: str) -> list[TrackInfo]:
@@ -169,7 +213,45 @@ class MusicDatabase:
                 album_art_path=row['album_art_path'],
                 lyrics_file_path=row['lyrics_file_path'],
                 track_number=row['track_number'],
-                total_tracks=row['total_tracks']
+                total_tracks=row['total_tracks'],
+                disc_number=row['disc_number'],
+                total_discs=row['total_discs']
+            )
+            for row in self.cursor.fetchall()
+        ]
+
+    def get_album_tracks(self, album: str, artist: str = None) -> list[TrackInfo]:
+        """ Get all tracks from an album, properly ordered by disc and track number. """
+        if artist:
+            sql = """
+                SELECT * FROM tracks 
+                WHERE album = ? AND artist = ?
+                ORDER BY disc_number, track_number
+            """
+            params = (album, artist)
+        else:
+            sql = """
+                SELECT * FROM tracks 
+                WHERE album = ?
+                ORDER BY disc_number, track_number
+            """
+            params = (album,)
+
+        self.cursor.execute(sql, params)
+
+        return [
+            TrackInfo(
+                title=row['title'],
+                artist=row['artist'],
+                album=row['album'],
+                duration=row['duration'],
+                audio_file_path=row['audio_file_path'],
+                album_art_path=row['album_art_path'],
+                lyrics_file_path=row['lyrics_file_path'],
+                track_number=row['track_number'],
+                total_tracks=row['total_tracks'],
+                disc_number=row['disc_number'],
+                total_discs=row['total_discs']
             )
             for row in self.cursor.fetchall()
         ]
@@ -194,107 +276,248 @@ class MusicDatabase:
             self.conn.rollback()
             raise
 
-    def find_matches(self, query_hashes: list[tuple]) -> list[tuple[TrackInfo, float]]:
+    def add_fingerprints_batch(self, track_id: int, fingerprints: list[tuple[int, int]]) -> None:
+        """ Add fingerprints in batches. """
+        if not fingerprints:
+            return
+
+        MAX_BATCH_SIZE = 5000
+        MAX_RETRIES = 3
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                # Start transaction
+                self.cursor.execute("BEGIN EXCLUSIVE TRANSACTION")
+
+                # Delete existing fingerprints for this track
+                self.cursor.execute("DELETE FROM fingerprints WHERE track_id = ?", (track_id,))
+
+                # Insert in small chunks
+                for i in range(0, len(fingerprints), MAX_BATCH_SIZE):
+                    chunk = fingerprints[i:i + MAX_BATCH_SIZE]
+                    data = [(fp[0], track_id, fp[1]) for fp in chunk]
+
+                    self.cursor.executemany(
+                        "INSERT INTO fingerprints (hash, track_id, time_offset) VALUES (?, ?, ?)",
+                        data
+                    )
+
+                    # Commit after EACH chunk
+                    self.conn.commit()
+
+                    # Brief pause to prevent overload
+                    if i + MAX_BATCH_SIZE < len(fingerprints):
+                        time.sleep(0.01)
+                        self.cursor.execute("BEGIN EXCLUSIVE TRANSACTION")
+
+                # Update count
+                self.cursor.execute(
+                    "UPDATE tracks SET fingerprint_count = ? WHERE id = ?",
+                    (len(fingerprints), track_id)
+                )
+
+                self.conn.commit()
+                print(f'Added {len(fingerprints)} fingerprints for track {track_id}')
+                return
+
+            except sqlite3.DatabaseError as e:
+                self.conn.rollback()
+                print(f'Attempt {attempt + 1} failed: {e}')
+
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(1)
+                    # Check database integrity
+                    try:
+                        result = self.cursor.execute("PRAGMA integrity_check").fetchone()
+                        if result[0] != 'ok':
+                            raise Exception("Database corrupted!")
+                    except:
+                        raise
+                else:
+                    raise
+
+    def find_matches(self, query_hashes: list[tuple]) -> list[tuple]:
         """ Find matches from the query hashes with the confidence scores. """
         if not query_hashes:
             return []
 
-        hash_values = [h[0] for h in query_hashes]
+        start_time = time.time()
 
-        placeholders = ','.join('?' * len(hash_values))
-        sql = f"""
-            SELECT hash, track_id, time_offset 
-            FROM fingerprints
-            WHERE hash IN ({placeholders})
-        """
+        # Create hash lookup
+        hash_to_times = defaultdict(list)
+        for hash_val, time_offset in query_hashes:
+            hash_to_times[hash_val].append(time_offset)
 
-        self.cursor.execute(sql, hash_values)
-        matches = self.cursor.fetchall()
+        unique_hashes = list(hash_to_times.keys())
+        print(f'Searching for {len(unique_hashes)} unique hashes from {len(query_hashes)} total')
 
-        # First, let's store matches by track
-        track_matches = {}
-        track_total_matches = {}
-        for db_match in matches:
-            track_id = db_match['track_id']
-            db_time = db_match['time_offset']
+        if len(unique_hashes) > 1000:
+            matches = self._find_matches_temp_table(hash_to_times)
+        else:
+            matches = self._find_matches_batched(hash_to_times)
 
-            track_total_matches[track_id] = track_total_matches.get(track_id, 0) + 1
+        results = self._process_matches(matches, hash_to_times, len(query_hashes))
 
-            for query_hash, query_time in query_hashes:
-                if query_hash == db_match['hash']:
-                    time_diff = int(db_time) - int(query_time)
+        elapsed = time.time() - start_time
+        print(f'Match completed in {elapsed:.3f} seconds')
 
-                    if track_id not in track_matches:
-                        track_matches[track_id] = {}
+        return results
 
-                    if time_diff not in track_matches[track_id]:
-                        track_matches[track_id][time_diff] = []
+    def _find_matches_temp_table(self, hash_to_times: dict) -> list[tuple]:
+        """ Use a temporary table to find matches. """
+        self.cursor.execute("""
+            CREATE TEMP TABLE IF NOT EXISTS query_hashes(
+                hash INTEGER PRIMARY KEY
+            )
+        """)
 
-                    # We are grouping by time difference
-                    track_matches[track_id][time_diff].append((db_time, query_time))
-                    break
+        # Clear and populate temp table
+        self.cursor.execute("DELETE FROM query_hashes")
+        self.cursor.executemany(
+            "INSERT INTO query_hashes (hash) VALUES (?)",
+            [(h,) for h in hash_to_times.keys()]
+        )
+
+        self.cursor.execute("""
+            SELECT f.hash, f.track_id, f.time_offset
+            FROM fingerprints f
+            INNER JOIN query_hashes q ON f.hash = q.hash
+            ORDER BY f.track_id, f.hash
+        """)
+
+        return self.cursor.fetchall()
+
+    def _find_matches_batched(self, hash_to_times: dict) -> list[tuple]:
+        """ Batched processing for smaller hash sets. """
+        all_matches = []
+        unique_hashes = list(hash_to_times.keys())
+
+        BATCH_SIZE = 500
+        for i in range(0, len(unique_hashes), BATCH_SIZE):
+            batch = unique_hashes[i:i + BATCH_SIZE]
+            placeholders = ','.join('?' * len(batch))
+
+            self.cursor.execute("""
+                SELECT hash, track_id, time_offset
+                FROM fingerprints
+                WHERE hash in ({placeholders})
+                ORDER BY track_id, hash
+            """, batch)
+
+            all_matches.extend(self.cursor.fetchall())
+
+        return all_matches
+
+    def _process_matches(self, matches: list, hash_to_times: dict, total_query_hashes: int) -> list[tuple]:
+        """ Process matches to find best tracks. """
+        track_time_diffs = defaultdict(list)
+
+        for match in matches:
+            hash_val = match['hash']
+            track_id = match['track_id']
+            db_time = match['time_offset']
+
+            # Calculate time differences for all query occurrences of this hash
+            for query_time in hash_to_times[hash_val]:
+                time_diff = db_time - query_time
+                track_time_diffs[track_id].append(time_diff)
 
         track_scores = []
-        for track_id, time_diffs in track_matches.items():
-            # Get the time_diff with the most matches
-            best_diff = max(time_diffs.keys(), key=lambda d: len(time_diffs[d]))
-            aligned_matches = time_diffs[best_diff]
-
-            if len(aligned_matches) < self.config.min_absolute_matches:
+        for track_id, time_diffs in track_time_diffs.items():
+            if len(time_diffs) < self.config.min_absolute_matches:
                 continue
 
+            # Count occurrences of each time difference
+            diff_counts = Counter(time_diffs)
+            most_common_diff, aligned_count = diff_counts.most_common(1)[0]
+
             # Calculate confidence
-            confidence = self._calculate_match_confidence(
-                aligned_matches=len(aligned_matches),
-                total_query_hashes=len(query_hashes),
-                total_db_matches=track_total_matches[track_id],
-                time_spread=max(m[1] for m in aligned_matches) - min(m[1] for m in aligned_matches)
-            )
+            # This score is how many matches align with the same time offset
+            alignment_score = aligned_count / len(time_diffs)
 
-            track_scores.append((track_id, confidence, best_diff))
+            # What percentage of the query matches
+            coverage_score = aligned_count / total_query_hashes
 
-        # Filter by minimum confidence
-        valid_matches = [t for t in track_scores if t[1] >= self.config.min_match_confidence]
+            confidence = (alignment_score * 0.6 + coverage_score * 0.4)
 
-        # Sort by confidence
-        valid_matches.sort(key=lambda x: x[1], reverse=True)
+            if aligned_count > 100:
+                confidence *= 1.2
+            elif aligned_count > 50:
+                confidence *= 1.1
 
-        # Load track info
+            confidence = min(confidence, 1.0)
+
+            if confidence >= self.config.min_match_confidence:
+                track_scores.append((track_id, confidence, aligned_count, most_common_diff))
+
+        track_scores.sort(key=lambda x: (x[1], x[2]), reverse=True)
+
         results = []
-        for track_id, confidence, best_diff in valid_matches:
+        for track_id, confidence, match_count, time_offset in track_scores[:10]:
             track_info = self.get_track(track_id)
             if track_info:
+                print(f'Track {track_id} matched {match_count} with confidence {confidence}')
                 results.append((track_info, confidence))
 
         return results
 
-    def _calculate_match_confidence(self, aligned_matches: int,
-                                    total_query_hashes: int,
-                                    total_db_matches: int,
-                                    time_spread: float = 0) -> float:
-        """ Calculate the confidence score of the matches based on time consistency. """
-        match_rate = aligned_matches / total_query_hashes
+    def get_stats(self) -> dict:
+        if self._stats_cache and (time.time() - self._cache_time) < 60:
+            return self._stats_cache
 
-        # What % of found matches are properly aligned
-        alignment_quality = aligned_matches / total_db_matches
+        stats = {}
 
-        # Penalize poor judgment
-        if alignment_quality < 0.5:
-            match_rate *= 0.5
-        elif alignment_quality > 0.8:
-            match_rate *= 1.15
+        self.cursor.execute("""
+            SELECT 
+                (SELECT COUNT(*) FROM tracks) as total_tracks,
+                (SELECT COUNT(*) FROM fingerprints) as total_fingerprints,
+                (SELECT COUNT(DISTINCT hash) FROM fingerprints) as unique_hashes,
+                (SELECT SUM(fingerprint_count) FROM tracks) as total_fps_from_tracks,
+                (SELECT COUNT(DISTINCT album) FROM tracks) as total_albums,
+                (SELECT COUNT(DISTINCT artist) FROM tracks) as total_artists,
+                (SELECT MAX(disc_number) FROM tracks) as max_disc_number,
+                (SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()) as db_size
+        """)
 
-        # Absolute match bonus / penalty
-        if aligned_matches > 20:
-            match_rate *= 1.2
-        elif aligned_matches < 5:
-            match_rate *= 0.5
+        row = self.cursor.fetchone()
 
-        # Time spread bonus
-        if time_spread > 100:
-            match_rate *= 1.1
+        stats['total_tracks'] = row['total_tracks']
+        stats['total_fingerprints'] = row['total_fingerprints']
+        stats['unique_hashes'] = row['unique_hashes']
+        stats['total_albums'] = row['total_albums']
+        stats['total_artists'] = row['total_artists']
+        stats['max_disc_number'] = row['max_disc_number'] or 1
+        stats['db_size_mb'] = row['db_size'] / 1024 / 1024
 
-        return min(match_rate, 1.0)
+        if stats['total_tracks'] > 0:
+            stats['avg_fingerprints_per_track'] = stats['total_fingerprints'] / stats['total_tracks']
+        else:
+            stats['avg_fingerprints_per_track'] = 0
+
+        self._stats_cache = stats
+        self._cache_time = time.time()
+
+        return stats
+
+    def optimize_database(self):
+        """Optimize database for best performance"""
+        print("Optimizing database...")
+
+        self.cursor.executescript("""
+            ANALYZE;
+            VACUUM;
+            PRAGMA optimize;
+        """)
+
+        print("Database optimization complete")
+
+    def checkpoint(self):
+        """Force write to disk."""
+        self.cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    def vacuum(self):
+        """Clean up database."""
+        self.cursor.execute("VACUUM")
 
     def close(self):
         self.conn.close()

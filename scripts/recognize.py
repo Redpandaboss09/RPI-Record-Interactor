@@ -1,6 +1,7 @@
 import argparse
 import logging
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -15,27 +16,91 @@ from audio.processing import AudioProcessor
 
 
 def record_audio(duration: float, config: Config) -> np.ndarray:
-    """ Record live audio for the specified duration. """
+    """Record live audio for the specified duration."""
     with RealTimeAudioCapture(config, max_recording_seconds=duration) as capture:
         return capture.collect_audio(duration)
 
 
-def recognize_audio(audio_data: np.ndarray, config: Config) -> list[tuple[TrackInfo, float]]:
-    """ Generate fingerprints and find matches in the database. """
+def recognize_audio_optimized(audio_data: np.ndarray, config: Config) -> list[tuple[TrackInfo, float]]:
+    """Optimized audio recognition with early termination."""
     processor = AudioProcessor(config)
     generator = FingerprintGenerator(config)
 
+    # Start timing
+    start_time = time.time()
+
+    # Generate fingerprints
+    print("Generating fingerprints...")
+    fp_start = time.time()
     fingerprints = generator.fingerprint_audio(audio_data, processor)
+    fp_time = time.time() - fp_start
+    print(f"Generated {len(fingerprints)} fingerprints in {fp_time:.3f}s")
+
+    # Early termination if too few fingerprints
+    if len(fingerprints) < 20:
+        print("Too few fingerprints generated")
+        return []
+
+    print("Searching database...")
+    search_start = time.time()
 
     with MusicDatabase(config) as db:
-        return db.find_matches(fingerprints)
+        matches = db.find_matches(fingerprints)
+
+    search_time = time.time() - search_start
+    total_time = time.time() - start_time
+
+    print(f"Search completed in {search_time:.3f}s")
+    print(f"Total recognition time: {total_time:.3f}s")
+
+    return matches
+
+
+def recognize_audio_progressive(audio_data: np.ndarray, config: Config,
+                                confidence_threshold: float = 0.95) -> list[tuple[TrackInfo, float]]:
+    """Progressive recognition - process audio in chunks for faster results."""
+    processor = AudioProcessor(config)
+    generator = FingerprintGenerator(config)
+
+    # Process in increasing chunk sizes
+    chunk_sizes = [3, 5, 10]  # seconds
+    sample_rate = config.target_sample_rate
+
+    for chunk_seconds in chunk_sizes:
+        chunk_samples = int(chunk_seconds * sample_rate)
+        if chunk_samples > len(audio_data):
+            chunk_samples = len(audio_data)
+
+        print(f"\nTrying with {chunk_seconds}s of audio...")
+        chunk = audio_data[:chunk_samples]
+
+        # Generate fingerprints
+        fingerprints = generator.fingerprint_audio(chunk, processor)
+
+        if len(fingerprints) < 10:
+            continue
+
+        # Try to find matches
+        with MusicDatabase(config) as db:
+            matches = db.find_matches(fingerprints)
+
+        if matches and matches[0][1] >= confidence_threshold:
+            print(f"High confidence match found with {chunk_seconds}s!")
+            return matches
+
+        if chunk_samples >= len(audio_data):
+            break
+
+    # If no high confidence match, process full audio
+    print("\nProcessing full audio...")
+    return recognize_audio_optimized(audio_data, config)
 
 
 def display_results(matches: list[tuple[TrackInfo, float]], recording_duration: float):
-    """ Display recognition results. """
-    print(f'\n{'-'*50}')
+    """Display recognition results."""
+    print(f'\n{"=" * 60}')
     print(f'Recording duration: {recording_duration:.1f} seconds')
-    print(f'\n{'-'*50}')
+    print(f'{"=" * 60}\n')
 
     if not matches:
         print('No matches found.')
@@ -46,20 +111,17 @@ def display_results(matches: list[tuple[TrackInfo, float]], recording_duration: 
     for i, (track, confidence) in enumerate(matches[:5], 1):
         print(f'{i}. [{confidence:5.1%}] {track.title} - {track.artist}')
         if track.album:
-            print(f'            Album: {track.album}')
+            print(f'     └─ Album: {track.album}')
         print()
 
 
 def setup_logging(verbose: bool):
-    """ Create logs directory and configure logging. """
-    # Creates the directory if it does not exist
+    """Create logs directory and configure logging."""
     project_root = Path(__file__).parent.parent
     log_dir = project_root / 'logs'
     log_dir.mkdir(exist_ok=True)
 
-    # Configure logging
     log_file = log_dir / 'recognize.log'
-
     log_level = logging.DEBUG if verbose else logging.INFO
 
     logging.basicConfig(
@@ -77,13 +139,17 @@ def setup_logging(verbose: bool):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Recognize songs using audio fingerprinting')
+    parser = argparse.ArgumentParser(description='Music recognition using audio fingerprinting')
     parser.add_argument('-d', '--duration', type=float, default=10.0,
                         help='Duration of the recording in seconds (default: 10.0s)')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Enable verbose output')
     parser.add_argument('--device', type=int, default=27,
                         help='Device index (default: 27)')
+    parser.add_argument('--progressive', action='store_true',
+                        help='Use progressive recognition (faster for clear audio)')
+    parser.add_argument('--confidence', type=float, default=0.95,
+                        help='Confidence threshold for progressive mode (default: 0.95)')
 
     args = parser.parse_args()
 
@@ -98,24 +164,37 @@ def main():
 
     try:
         print(f'Preparing to record for {args.duration} seconds...')
-        import time
+
+        # Countdown
+        import time as time_module
         for i in range(3, 0, -1):
-            print(f'Starting in {i}...')
-            time.sleep(1)
+            print(f'   Starting in {i}...')
+            time_module.sleep(1)
 
         # Start recording
-        print(f'\nListening...\n')
+        print(f'\nRECORDING - Please play audio now!\n')
 
+        record_start = time.time()
         audio_data = record_audio(args.duration, config)
+        record_time = time.time() - record_start
 
-        print(f'Recording complete!')
+        print(f'\nRecording complete! ({record_time:.1f}s)')
+        print(f'Analyzing audio...\n')
 
-        print('Searching for matches...')
-        matches = recognize_audio(audio_data, config)
+        # Recognize
+        if args.progressive:
+            matches = recognize_audio_progressive(
+                audio_data, config,
+                confidence_threshold=args.confidence
+            )
+        else:
+            matches = recognize_audio_optimized(audio_data, config)
 
+        # Display results
         display_results(matches, args.duration)
+
     except KeyboardInterrupt:
-        print('\nRecording cancelled by user')
+        print('\n\nRecording cancelled by user')
         logger.info('User cancelled recording')
     except TimeoutError as e:
         print(f'\nRecording failed: {e}')

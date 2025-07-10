@@ -22,6 +22,8 @@ class TrackInfo:
     lyrics_file_path: Optional[str] = None
     track_number: Optional[int] = None
     total_tracks: Optional[int] = None
+    disc_number: Optional[int] = 1
+    total_discs: Optional[int] = None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}
@@ -36,7 +38,7 @@ class Config:
     # File paths
     db_path: str = "database/collection"
     log_dir: str = "logs"
-    music_library: str = "music_data/mp3"
+    music_library: str = "music_data"
 
     # Audio settings
     buffer_size: int = 2048
@@ -48,16 +50,16 @@ class Config:
     # Spectrogram settings
     stft_window_size: int = 2048
     stft_hop_size: int = 512
-    neighborhood_size: int = 10
-    peak_threshold_db: float = -40.0
+    neighborhood_size: int = 20
+    peak_threshold_db: float = -60.0
 
     # Constellation parameters
-    fan_value: int = 10
+    fan_value: int = 15
     min_time_delta: int = 0  # In frames
     max_time_delta: int = 200  # In frames, ~3 seconds
 
     # Recognition parameters
-    min_match_confidence: float = 0.05
+    min_match_confidence: float = 0.1
     min_absolute_matches: int = 5
 
     # Procession options

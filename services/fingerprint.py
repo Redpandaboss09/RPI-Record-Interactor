@@ -1,5 +1,4 @@
 import numpy as np
-import hashlib
 
 import sys
 from pathlib import Path
@@ -16,7 +15,7 @@ class FingerprintGenerator:
 
     def _generate_constellation_pairs(self, peaks: list[tuple]) -> list[tuple]:
         """ Generate the constellation pairs from the audio peak map. """
-        peaks = sorted(peaks, key=lambda p: p[0])  # sort by the time index
+        peaks = sorted(peaks, key=lambda p: p[0])  # sort by the time
 
         pairs = []
         for i in range(len(peaks)):  # Set the peak as the anchor
@@ -41,13 +40,11 @@ class FingerprintGenerator:
             target_freq = int(target[1])
             time_delta = int(target[0]) - int(anchor[0])
 
-            # Create a unique string representation of this relationship
-            hash_input = f"{anchor_freq}|{target_freq}|{time_delta}"
+            hash_value = ((anchor_freq & 0x3FF) << 22) | \
+                         ((target_freq & 0x3FF) << 12) | \
+                         (time_delta & 0xFFF)
 
-            # Generate hash using SHA1
-            hash_value = hashlib.sha1(hash_input.encode('utf-8')).hexdigest()
-
-            hashes.append((hash_value[:20], int(anchor_time)))  # We don't need the entire hash
+            hashes.append((hash_value, anchor_time))
 
         return hashes
 
