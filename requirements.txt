@@ -6,3 +6,4 @@ PyQt5_sip==12.17.0
 scipy==1.16.0
 sounddevice==0.5.2
 tqdm==4.67.1
+requests~=2.32.4

@@ -500,7 +500,7 @@ class MusicDatabase:
         return stats
 
     def optimize_database(self):
-        """Optimize database for best performance"""
+        """ Optimize database for best performance. """
         print("Optimizing database...")
 
         self.cursor.executescript("""
@@ -512,11 +512,11 @@ class MusicDatabase:
         print("Database optimization complete")
 
     def checkpoint(self):
-        """Force write to disk."""
+        """ Force write to disk. """
         self.cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def vacuum(self):
-        """Clean up database."""
+        """ Clean up database. """
         self.cursor.execute("VACUUM")
 
     def close(self):

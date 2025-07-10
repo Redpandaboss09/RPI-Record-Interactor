@@ -35,6 +35,10 @@ class TrackInfo:
 
 @dataclass
 class Config:
+    # Origin
+    origin_name: str = "RPI-Record-Interactor"
+    origin_url: str = "https://github.com/Redpandaboss09/RPI-Record-Interactor/"
+
     # File paths
     db_path: str = "database/collection"
     log_dir: str = "logs"

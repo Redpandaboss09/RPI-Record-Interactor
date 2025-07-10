@@ -16,13 +16,13 @@ from audio.processing import AudioProcessor
 
 
 def record_audio(duration: float, config: Config) -> np.ndarray:
-    """Record live audio for the specified duration."""
+    """ Record live audio for the specified duration. """
     with RealTimeAudioCapture(config, max_recording_seconds=duration) as capture:
         return capture.collect_audio(duration)
 
 
 def recognize_audio_optimized(audio_data: np.ndarray, config: Config) -> list[tuple[TrackInfo, float]]:
-    """Optimized audio recognition with early termination."""
+    """ Optimized audio recognition with early termination. """
     processor = AudioProcessor(config)
     generator = FingerprintGenerator(config)
 
@@ -58,7 +58,7 @@ def recognize_audio_optimized(audio_data: np.ndarray, config: Config) -> list[tu
 
 def recognize_audio_progressive(audio_data: np.ndarray, config: Config,
                                 confidence_threshold: float = 0.95) -> list[tuple[TrackInfo, float]]:
-    """Progressive recognition - process audio in chunks for faster results."""
+    """ Progressive recognition - process audio in chunks for faster results. """
     processor = AudioProcessor(config)
     generator = FingerprintGenerator(config)
 
@@ -97,7 +97,7 @@ def recognize_audio_progressive(audio_data: np.ndarray, config: Config,
 
 
 def display_results(matches: list[tuple[TrackInfo, float]], recording_duration: float):
-    """Display recognition results."""
+    """ Display recognition results. """
     print(f'\n{"=" * 60}')
     print(f'Recording duration: {recording_duration:.1f} seconds')
     print(f'{"=" * 60}\n')
@@ -116,7 +116,7 @@ def display_results(matches: list[tuple[TrackInfo, float]], recording_duration: 
 
 
 def setup_logging(verbose: bool):
-    """Create logs directory and configure logging."""
+    """ Create logs directory and configure logging. """
     project_root = Path(__file__).parent.parent
     log_dir = project_root / 'logs'
     log_dir.mkdir(exist_ok=True)
