@@ -28,12 +28,12 @@ class KioskApp(QMainWindow):
 
         self.mode_switch_timer = QtCore.QTimer()
         self.mode_switch_timer.setInterval(60000)  # One minute, in milliseconds
-        self.mode_switch_timer.timeout.connect(self.__timer_auto_switch)
+        self.mode_switch_timer.timeout.connect(self._timer_auto_switch)
         self.mode_switch_timer.start()
 
         self.audio_update_timer = QtCore.QTimer()
         self.audio_update_timer.setInterval(33)  # Every 33ms, which is around 30FPS
-        self.audio_update_timer.timeout.connect(self.__update_loop)
+        self.audio_update_timer.timeout.connect(self._update_loop)
         self.audio_update_timer.start()
 
         self.last_update_time = QtCore.QTime.currentTime()
@@ -50,9 +50,9 @@ class KioskApp(QMainWindow):
         self.current_mode = self.modes[self.current_mode_enum]
 
         if dev_mode:
-            self.handle_input = self.__handle_keyboard
+            self.handle_input = self._handle_keyboard
         else:
-            self.handle_input = self.__gpio_handler
+            self.handle_input = self._gpio_handler
 
     def keyPressEvent(self, event):
         """ Overloaded method for key presses, only used when dev_mode is True. """
@@ -76,7 +76,7 @@ class KioskApp(QMainWindow):
         if self.dev_mode:
             print(f"Current mode switched to {mode}")
 
-    def __handle_keyboard(self, event):
+    def _handle_keyboard(self, event):
         """ Binds mode changes to key presses while in dev_mode. """
         if event.key() == QtCore.Qt.Key_1:
             self.switch_mode(Modes.NOW_PLAYING)
@@ -85,15 +85,15 @@ class KioskApp(QMainWindow):
         elif event.key() == QtCore.Qt.Key_3:
             self.switch_mode(Modes.VISUALIZER)
 
-    def __gpio_handler(self, pin: int):
+    def _gpio_handler(self, pin: int):
         """ Binds actions to GPIO pins. """
         pass
 
-    def __timer_auto_switch(self):
+    def _timer_auto_switch(self):
         """ Switches mode based on timer calculation. """
         self.switch_mode(next(self.mode_cycle))
 
-    def __update_loop(self):
+    def _update_loop(self):
         """ Gathers latest audio data and processes it, stores it in the current context, and redraws the window. """
         current_time = QtCore.QTime.currentTime()
         dt = self.last_update_time.msecsTo(current_time) / 1000.0
