@@ -1,7 +1,6 @@
 import argparse
 import logging
 import re
-from typing import Optional
 from tqdm import tqdm
 
 import numpy as np
@@ -21,7 +20,7 @@ from services.fingerprint import FingerprintGenerator
 from services.music_database import MusicDatabase
 
 
-def get_disc_number_from_folder(folder_name: str) -> Optional[int]:
+def get_disc_number_from_folder(folder_name: str) -> int | None:
     """ Extract disc number from folder name (e.g., 'Disc 1', 'Disc 2'). """
     patterns = [
         r'[Dd]isc\s*(\d+)',
@@ -38,7 +37,7 @@ def get_disc_number_from_folder(folder_name: str) -> Optional[int]:
     return None
 
 
-def find_audio_files(folder_path: Path) -> list[tuple[Path, Path, Optional[int]]]:
+def find_audio_files(folder_path: Path) -> list[tuple[Path, Path, int | None]]:
     """Find all FLAC and MP3 files in folder structure, with disc numbers."""
     audio_files = []
 
@@ -143,7 +142,7 @@ def process_music_folder(folder_path: Path, config: Config, reprocess: bool = Fa
     logger.info(f'Processing complete - Success: {successful}, Failed: {failed}, Skipped: {skipped}')
 
 
-def extract_metadata(file_path: Path, album_folder: Path, disc_number: Optional[int]) -> Optional[TrackInfo]:
+def extract_metadata(file_path: Path, album_folder: Path, disc_number: int | None) -> TrackInfo | None:
     """Extract metadata from a FLAC or MP3 file."""
     try:
         file_ext = file_path.suffix.lower()
@@ -153,9 +152,18 @@ def extract_metadata(file_path: Path, album_folder: Path, disc_number: Optional[
             audio = FLAC(str(file_path))
 
             # Extract tags
-            title = audio.get("title", [file_path.stem])[0]
-            artist = audio.get("artist", ["Unknown Artist"])[0]
-            album = audio.get("album", [album_folder.name])[0]
+            title_list = audio.get("title", [])
+            artist_list = audio.get("artist", [])
+
+            if not title_list or not artist_list:
+                logging.warning(f'Skipping {file_path.name} - missing title or artist metadata')
+                return None
+
+            title = title_list[0]
+            artist = artist_list[0]
+
+            album_list = audio.get("album", [])
+            album = album_list[0] if album_list else album_folder.name
 
             # Track numbers
             track_str = audio.get("tracknumber", [""])[0]
@@ -180,9 +188,18 @@ def extract_metadata(file_path: Path, album_folder: Path, disc_number: Optional[
 
             # Try to get ID3 tags
             if audio.tags:
-                title = str(audio.tags.get("TIT2", file_path.stem))
-                artist = str(audio.tags.get("TPE1", "Unknown Artist"))
-                album = str(audio.tags.get("TALB", album_folder.name))
+                title_tag = audio.tags.get("TIT2")
+                artist_tag = audio.tags.get("TPE1")
+
+                if not title_tag or not artist_tag:
+                    logging.warning(f'Skipping {file_path.name} - missing title or artist metadata')
+                    return None
+
+                title = str(title_tag)
+                artist = str(artist_tag)
+
+                album_tag = audio.tags.get("TALB")
+                album = str(album_tag) if album_tag else album_folder.name
 
                 # Track numbers
                 track_info = audio.tags.get("TRCK", "")
@@ -256,10 +273,10 @@ def extract_metadata(file_path: Path, album_folder: Path, disc_number: Optional[
         return None
 
 
-def process_file(file_path: Path, album_folder: Path, disc_number: Optional[int],
+def process_file(file_path: Path, album_folder: Path, disc_number: int | None,
                  db: MusicDatabase, processor: AudioProcessor,
                  generator: FingerprintGenerator, config: Config,
-                 logger: logging.Logger, reprocess: bool) -> Optional[bool]:
+                 logger: logging.Logger, reprocess: bool) -> bool | None:
     """Process a single audio file."""
     try:
         # Extract metadata
@@ -304,7 +321,7 @@ def process_file(file_path: Path, album_folder: Path, disc_number: Optional[int]
         return False
 
 
-def load_audio_file(file_path: Path, target_sample_rate: int) -> Optional[np.ndarray]:
+def load_audio_file(file_path: Path, target_sample_rate: int) -> np.ndarray | None:
     """Load and convert audio file to numpy array."""
     try:
         file_ext = file_path.suffix.lower()

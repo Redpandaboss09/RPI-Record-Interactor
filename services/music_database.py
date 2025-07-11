@@ -4,7 +4,6 @@ import time
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -142,7 +141,7 @@ class MusicDatabase:
         self._track_cache.pop(track_id, None)
         self._stats_cache = None
 
-    def get_track(self, track_id: int) -> Optional[TrackInfo]:
+    def get_track(self, track_id: int) -> TrackInfo | None:
         """ Gets a track from the database. """
         # Check cache first
         if track_id in self._track_cache:

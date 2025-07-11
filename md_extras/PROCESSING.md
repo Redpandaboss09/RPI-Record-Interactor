@@ -1,6 +1,5 @@
 # The Shazam-Like Recognition Process
 
----
 *Disclaimer:*
 
 The following process is taken from the original Shazam paper by Avery Li-Chun Wang, ["An Industrial-Strength Audio 

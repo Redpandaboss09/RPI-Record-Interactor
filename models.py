@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import protocols as pr
@@ -17,13 +17,13 @@ class TrackInfo:
     artist: str
     duration: int
     audio_file_path: str
-    album: Optional[str] = None
-    album_art_path: Optional[str] = None
-    lyrics_file_path: Optional[str] = None
-    track_number: Optional[int] = None
-    total_tracks: Optional[int] = None
-    disc_number: Optional[int] = 1
-    total_discs: Optional[int] = None
+    album: None | str = None
+    album_art_path: None | str = None
+    lyrics_file_path: None | str = None
+    track_number: None | int = None
+    total_tracks: None | int = None
+    disc_number: None | int = 1
+    total_discs: None | int = None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}
